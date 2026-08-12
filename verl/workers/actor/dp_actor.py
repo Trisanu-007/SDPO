@@ -30,6 +30,7 @@ from torch.distributed.tensor import DTensor
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
 from verl.trainer.ppo.core_algos import agg_loss, compute_self_distillation_loss, get_policy_loss_fn, kl_penalty
+from verl.utils.attention_map_utils import make_attention_collector
 from verl.utils.attention_utils import index_first_axis, pad_input, rearrange, unpad_input
 from verl.utils.device import get_device_id, get_device_name
 from verl.utils.fsdp_utils import FSDPModule, fsdp2_clip_grad_norm_
@@ -115,6 +116,9 @@ class DataParallelPPOActor(BasePPOActor):
             self.scaler = ShardedGradScaler(growth_interval=400)
         else:
             self.scaler = None
+
+        # Step counter for attention map extraction (persists across update_policy calls)
+        self._attn_map_step = 0
 
         # Sum of squared probabilities computation (for optimal_token_baseline)
         # Only initialize if calculate_sum_pi_squared config is enabled
@@ -777,13 +781,47 @@ class DataParallelPPOActor(BasePPOActor):
                     # all return: (bsz, response_length)
                     return_all_logps = self_distillation_cfg.full_logit_distillation and not self_distillation_cfg.distillation_topk
                     distill_topk = self_distillation_cfg.distillation_topk if self_distillation_cfg.full_logit_distillation else None
-                    outputs = self._forward_micro_batch(
-                        model_inputs,
-                        temperature=temperature,
-                        calculate_entropy=calculate_entropy,
-                        return_all_logps=return_all_logps,
-                        distill_topk=distill_topk,
+
+                    # ----------------------------------------------------------------
+                    # Attention map extraction (opt-in, for teacher/student analysis)
+                    # ----------------------------------------------------------------
+                    attn_map_cfg = self.config.get("attn_map_config", None)
+                    _do_attn_capture = (
+                        attn_map_cfg is not None
+                        and getattr(attn_map_cfg, "enabled", False)
+                        and self_distillation_enabled
+                        and (self._attn_map_step % max(1, getattr(attn_map_cfg, "save_every_n_steps", 1)) == 0)
+                        and (
+                            getattr(attn_map_cfg, "max_steps_to_save", 0) == 0
+                            or self._attn_map_step < getattr(attn_map_cfg, "max_steps_to_save", 0)
+                        )
                     )
+
+                    # Student forward pass (input: prompt + response)
+                    if _do_attn_capture:
+                        _student_collector = make_attention_collector(
+                            model=self.actor_module,
+                            attn_map_cfg=attn_map_cfg,
+                            step=self._attn_map_step,
+                            role="student",
+                        )
+                        with _student_collector:
+                            outputs = self._forward_micro_batch(
+                                model_inputs,
+                                temperature=temperature,
+                                calculate_entropy=calculate_entropy,
+                                return_all_logps=return_all_logps,
+                                distill_topk=distill_topk,
+                            )
+                        _student_collector.save()
+                    else:
+                        outputs = self._forward_micro_batch(
+                            model_inputs,
+                            temperature=temperature,
+                            calculate_entropy=calculate_entropy,
+                            return_all_logps=return_all_logps,
+                            distill_topk=distill_topk,
+                        )
                     log_prob = outputs["log_probs"]
                     entropy = outputs["entropys"] if calculate_entropy else None
                     student_all_logps = outputs.get("all_logps") if return_all_logps else None
@@ -817,16 +855,36 @@ class DataParallelPPOActor(BasePPOActor):
                             self.teacher_module is None or self.teacher_module is self.actor_module
                         ):
                             raise ValueError("trust-region teacher requires a separate teacher_module in the actor worker.")
-                        with torch.no_grad():
-                            teacher_outputs = self._forward_micro_batch(
-                                teacher_inputs,
-                                temperature=temperature,
-                                calculate_entropy=False,
-                                return_all_logps=return_all_logps,
-                                distill_topk=distill_topk,
-                                topk_indices=student_topk_indices,
-                                module=teacher_model,
+                        # Teacher forward pass (input: prompt + feedback)
+                        if _do_attn_capture:
+                            _teacher_collector = make_attention_collector(
+                                model=teacher_model,
+                                attn_map_cfg=attn_map_cfg,
+                                step=self._attn_map_step,
+                                role="teacher",
                             )
+                            with torch.no_grad(), _teacher_collector:
+                                teacher_outputs = self._forward_micro_batch(
+                                    teacher_inputs,
+                                    temperature=temperature,
+                                    calculate_entropy=False,
+                                    return_all_logps=return_all_logps,
+                                    distill_topk=distill_topk,
+                                    topk_indices=student_topk_indices,
+                                    module=teacher_model,
+                                )
+                            _teacher_collector.save()
+                        else:
+                            with torch.no_grad():
+                                teacher_outputs = self._forward_micro_batch(
+                                    teacher_inputs,
+                                    temperature=temperature,
+                                    calculate_entropy=False,
+                                    return_all_logps=return_all_logps,
+                                    distill_topk=distill_topk,
+                                    topk_indices=student_topk_indices,
+                                    module=teacher_model,
+                                )
                         teacher_log_prob = teacher_outputs["log_probs"]
                         teacher_all_logps = teacher_outputs.get("all_logps") if return_all_logps else None
                         teacher_topk_logps = teacher_outputs.get("topk_logps") if distill_topk else None
@@ -918,4 +976,6 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_optimizer.zero_grad()
         if did_update:
             self._update_teacher()
+        # Advance attn-map step counter (once per update_policy call, regardless of mini-batches)
+        self._attn_map_step += 1
         return metrics
