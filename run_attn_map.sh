@@ -33,7 +33,7 @@ set -euo pipefail
 # ------------------------------------------------------------------
 # Parse arguments
 # ------------------------------------------------------------------
-ATTN_SAVE_DIR="/scratch/tris/sdpo_experiments/attention_maps_verl"
+ATTN_SAVE_DIR="/scratch/hrishikesh/users/tri/sdpo_results/attention_maps_verl"
 SUFFIX="attn_map_run"
 
 while [[ $# -gt 0 ]]; do
