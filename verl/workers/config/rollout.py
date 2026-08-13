@@ -224,10 +224,7 @@ class RolloutConfig(BaseConfig):
         """Validate the rollout config"""
         # Deprecation warning for mode field - only async mode is supported
         if self.mode == "sync":
-            raise ValueError(
-                "Rollout mode 'sync' has been removed. Please set "
-                "`actor_rollout_ref.rollout.mode=async` or remove the mode setting entirely."
-            )
+            pass # allow sync mode
         if self.mode != "async":
             warnings.warn(
                 f"Unknown rollout mode '{self.mode}'. Only 'async' mode is supported. "

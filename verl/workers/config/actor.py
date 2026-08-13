@@ -256,6 +256,12 @@ class ActorConfig(BaseConfig):
     # global_batch_size: global batch size
     global_batch_info: dict = field(default_factory=dict)
 
+    # Attention map extraction config (opt-in).
+    # Populated from actor.yaml attn_map_config block when enabled=True.
+    # Kept as Any to accept both OmegaConf DictConfig and plain dict.
+    attn_map_config: Any = None
+
+
     def __post_init__(self):
         """Validate actor configuration parameters."""
         assert self.strategy != MISSING

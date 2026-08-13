@@ -117,6 +117,8 @@ class AttentionMapCollector:
         step: int = 0,
         role: str = "student",
         rank: int = 0,
+        attention_mask: Optional[torch.Tensor] = None,
+        input_ids: Optional[torch.Tensor] = None,
     ) -> None:
         self.model = model
         self.save_dir = Path(save_dir)
@@ -124,6 +126,10 @@ class AttentionMapCollector:
         self.step = step
         self.role = role
         self.rank = rank
+        # attention_mask: (batch, seq_len) with 1=valid, 0=padding
+        # Used to slice out only the real (non-padding) token rows/columns before saving.
+        self.attention_mask = attention_mask
+        self.input_ids = input_ids
 
         # Collected attention tensors: {layer_name: list[Tensor]}
         self._captured: dict[str, list[torch.Tensor]] = {}
@@ -236,7 +242,9 @@ class AttentionMapCollector:
             <save_dir>/step_{step:06d}_{role}.npz
 
         Array format per key "layer_<name>":
-            shape: (n_heads, seq_len, seq_len)  — averaged over batch dimension
+            shape: (n_heads, n_valid, n_valid)  — non-padding tokens only,
+                   averaged over batch dimension.
+            If no attention_mask was supplied, shape is (n_heads, seq_len, seq_len).
         """
         if not self._captured:
             logger.warning(
@@ -255,20 +263,46 @@ class AttentionMapCollector:
         self.save_dir.mkdir(parents=True, exist_ok=True)
         out_path = self.save_dir / f"step_{self.step:06d}_{self.role}.npz"
 
+        # Compute valid (non-padding) token count from attention_mask.
+        # attention_mask: (batch, seq_len), 1=valid, 0=padding.
+        # We take the minimum valid length across the batch so every batch item
+        # can be sliced to the same shape before averaging.
+        valid_len: Optional[int] = None
+        if self.attention_mask is not None:
+            mask_cpu = self.attention_mask.cpu()
+            # Sum of 1s per batch item gives the valid token count.
+            valid_lengths = mask_cpu.sum(dim=-1).long()  # (batch,)
+            valid_len = int(valid_lengths.min().item())
+            if valid_len <= 0:
+                valid_len = None  # fallback: keep full sequence
+
         arrays: dict[str, np.ndarray] = {}
         for layer_name, tensors in self._captured.items():
             # tensors: list of (batch, n_heads, seq_len, seq_len) tensors
-            # Stack micro-batches along batch dimension, then average over batch
             stacked = torch.cat(tensors, dim=0)  # (total_batch, n_heads, seq, seq)
-            averaged = stacked.mean(dim=0).numpy()  # (n_heads, seq, seq)
+            if valid_len is not None:
+                # Slice to valid token rows and columns only.
+                # This works for right-padded sequences where valid tokens are
+                # at positions [0 : valid_len].
+                stacked = stacked[:, :, :valid_len, :valid_len]
+            averaged = stacked.mean(dim=0).numpy()  # (n_heads, n_valid, n_valid)
             safe_key = "layer_" + layer_name.replace(".", "_")
             arrays[safe_key] = averaged
 
+        if self.input_ids is not None:
+            input_ids_cpu = self.input_ids.cpu()
+            if valid_len is not None:
+                input_ids_cpu = input_ids_cpu[:, :valid_len]
+            arrays["input_ids"] = input_ids_cpu.numpy()
+
         np.savez_compressed(str(out_path), **arrays)
+        first_shape = next(iter(arrays.values())).shape
         logger.info(
-            "[AttentionMapCollector] Saved %d layer maps to %s",
+            "[AttentionMapCollector] Saved %d layer maps to %s  shape=%s%s",
             len(arrays),
             out_path,
+            first_shape,
+            f"  (sliced to {valid_len} valid tokens)" if valid_len else "",
         )
         return out_path
 
@@ -282,6 +316,8 @@ def make_attention_collector(
     attn_map_cfg,
     step: int,
     role: str,
+    attention_mask: Optional[torch.Tensor] = None,
+    input_ids: Optional[torch.Tensor] = None,
 ) -> "AttentionMapCollector":
     """Construct an AttentionMapCollector from a config object.
 
@@ -295,12 +331,16 @@ def make_attention_collector(
         attn_map_cfg: A config object (OmegaConf DictConfig or SimpleNamespace).
         step: Current step counter.
         role: "student" or "teacher".
+        attention_mask: Optional (batch, seq_len) bool/int tensor. When provided,
+            the saved attention maps are sliced to only the non-padding token
+            rows and columns, significantly reducing file size.
+        input_ids: Optional (batch, seq_len) tensor to save alongside maps for visualization.
 
     Returns:
         An AttentionMapCollector instance (not yet entered as context manager).
     """
-    save_dir = getattr(attn_map_cfg, "save_dir", "./attention_maps")
-    num_layers = getattr(attn_map_cfg, "num_layers_from_end", 4)
+    save_dir = attn_map_cfg.get("save_dir", "./attention_maps") if isinstance(attn_map_cfg, dict) else getattr(attn_map_cfg, "save_dir", "./attention_maps")
+    num_layers = attn_map_cfg.get("num_layers_from_end", 4) if isinstance(attn_map_cfg, dict) else getattr(attn_map_cfg, "num_layers_from_end", 4)
     rank = dist.get_rank() if (dist.is_available() and dist.is_initialized()) else 0
     return AttentionMapCollector(
         model=model,
@@ -309,6 +349,8 @@ def make_attention_collector(
         step=step,
         role=role,
         rank=rank,
+        attention_mask=attention_mask,
+        input_ids=input_ids,
     )
 
 

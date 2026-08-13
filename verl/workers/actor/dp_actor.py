@@ -786,34 +786,56 @@ class DataParallelPPOActor(BasePPOActor):
                     # Attention map extraction (opt-in, for teacher/student analysis)
                     # ----------------------------------------------------------------
                     attn_map_cfg = self.config.get("attn_map_config", None)
+                    # NOTE: attn_map_cfg may be a plain dict (after OmegaConf.to_object)
+                    # or a DictConfig. Use a helper that handles both.
+                    def _cfg_get(cfg, key, default):
+                        if isinstance(cfg, dict):
+                            return cfg.get(key, default)
+                        return getattr(cfg, key, default)
+
                     _do_attn_capture = (
                         attn_map_cfg is not None
-                        and getattr(attn_map_cfg, "enabled", False)
+                        and _cfg_get(attn_map_cfg, "enabled", False)
                         and self_distillation_enabled
-                        and (self._attn_map_step % max(1, getattr(attn_map_cfg, "save_every_n_steps", 1)) == 0)
+                        and (self._attn_map_step % max(1, _cfg_get(attn_map_cfg, "save_every_n_steps", 1)) == 0)
                         and (
-                            getattr(attn_map_cfg, "max_steps_to_save", 0) == 0
-                            or self._attn_map_step < getattr(attn_map_cfg, "max_steps_to_save", 0)
+                            _cfg_get(attn_map_cfg, "max_steps_to_save", 0) == 0
+                            or self._attn_map_step < _cfg_get(attn_map_cfg, "max_steps_to_save", 0)
                         )
                     )
 
                     # Student forward pass (input: prompt + response)
                     if _do_attn_capture:
+                        # --- Attention-map capture pass (no_grad, separate from loss pass) ---
+                        # We do NOT capture inside the loss forward pass because that would keep
+                        # O(seq^2) attention weight tensors in the autograd graph throughout
+                        # backward(), causing OOM. Instead: capture under no_grad first,
+                        # then run the normal loss forward (with output_attentions=False).
                         _student_collector = make_attention_collector(
                             model=self.actor_module,
                             attn_map_cfg=attn_map_cfg,
                             step=self._attn_map_step,
                             role="student",
+                            attention_mask=model_inputs.get("attention_mask"),
+                            input_ids=model_inputs.get("input_ids"),
                         )
-                        with _student_collector:
-                            outputs = self._forward_micro_batch(
+                        with torch.no_grad(), _student_collector:
+                            self._forward_micro_batch(
                                 model_inputs,
                                 temperature=temperature,
-                                calculate_entropy=calculate_entropy,
-                                return_all_logps=return_all_logps,
-                                distill_topk=distill_topk,
+                                calculate_entropy=False,
+                                return_all_logps=False,
+                                distill_topk=None,
                             )
                         _student_collector.save()
+                        # Now run the actual gradient-tracked forward pass without attn capture
+                        outputs = self._forward_micro_batch(
+                            model_inputs,
+                            temperature=temperature,
+                            calculate_entropy=calculate_entropy,
+                            return_all_logps=return_all_logps,
+                            distill_topk=distill_topk,
+                        )
                     else:
                         outputs = self._forward_micro_batch(
                             model_inputs,
@@ -862,6 +884,8 @@ class DataParallelPPOActor(BasePPOActor):
                                 attn_map_cfg=attn_map_cfg,
                                 step=self._attn_map_step,
                                 role="teacher",
+                                attention_mask=teacher_inputs.get("attention_mask"),
+                                input_ids=teacher_inputs.get("input_ids"),
                             )
                             with torch.no_grad(), _teacher_collector:
                                 teacher_outputs = self._forward_micro_batch(

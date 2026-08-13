@@ -30,6 +30,7 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict
 from tensordict import TensorDict
 from transformers import AutoProcessor, AutoTokenizer
+from transformers.data.data_collator import pad_without_fast_tokenizer_warning
 
 from verl.experimental.agent_loop.prometheus_utils import update_prometheus_config
 from verl.experimental.agent_loop.utils import resolve_config_path
@@ -541,7 +542,8 @@ class AgentLoopWorker:
 
         # TODO(wuxibin): remove padding and use tensordict.
         self.tokenizer.padding_side = "left"
-        prompt_output = self.tokenizer.pad(
+        prompt_output = pad_without_fast_tokenizer_warning(
+            self.tokenizer,
             {"input_ids": output.prompt_ids},
             padding="max_length",
             max_length=self.config.actor_rollout_ref.rollout.prompt_length,
@@ -553,7 +555,8 @@ class AgentLoopWorker:
             prompt_output["attention_mask"] = prompt_output["attention_mask"].unsqueeze(0)
 
         self.tokenizer.padding_side = "right"
-        response_output = self.tokenizer.pad(
+        response_output = pad_without_fast_tokenizer_warning(
+            self.tokenizer,
             {"input_ids": output.response_ids},
             padding="max_length",
             max_length=self.config.actor_rollout_ref.rollout.response_length,
@@ -564,7 +567,8 @@ class AgentLoopWorker:
             response_output["input_ids"] = response_output["input_ids"].unsqueeze(0)
             response_output["attention_mask"] = response_output["attention_mask"].unsqueeze(0)
 
-        response_mask_output = self.tokenizer.pad(
+        response_mask_output = pad_without_fast_tokenizer_warning(
+            self.tokenizer,
             {"input_ids": output.response_mask},
             padding="max_length",
             max_length=self.config.actor_rollout_ref.rollout.response_length,

@@ -39,9 +39,6 @@ from vllm.inputs import TokensPrompt
 from vllm.lora.request import LoRARequest
 from vllm.outputs import RequestOutput
 from vllm.usage.usage_lib import UsageContext
-from vllm.v1.engine.async_llm import AsyncLLM
-from vllm.v1.engine.core import EngineCoreProc
-from vllm.v1.engine.utils import CoreEngineProcManager
 from vllm.v1.executor.abstract import Executor
 
 from verl.single_controller.ray import RayClassWithInitArgs
@@ -75,7 +72,9 @@ if _VLLM_VERSION > version.parse("0.11.0"):
 
         get_encoding()
 else:
-    from vllm.utils import FlexibleArgumentParser, get_tcp_uri
+    from vllm.utils import FlexibleArgumentParser
+    def get_tcp_uri(host, port):
+        return f"tcp://{host}:{port}"
 if _VLLM_VERSION >= version.parse("0.12.0"):
     from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
     from vllm.v1.outputs import ModelRunnerOutput
@@ -202,7 +201,11 @@ class vLLMHttpServer:
 
         self.config: RolloutConfig = omega_conf_to_dataclass(config)
         self.model_config: HFModelConfig = omega_conf_to_dataclass(model_config, dataclass_type=HFModelConfig)
-        self.config.max_model_len = get_max_position_embeddings(self.model_config.hf_config)
+        # Only fall back to model's max_position_embeddings when no explicit limit was
+        # configured. The RolloutConfig field defaults to None in rollout.yaml; the
+        # schemas.py dataclass default (32768) is only reached when nothing was passed.
+        if self.config.max_model_len is None:
+            self.config.max_model_len = get_max_position_embeddings(self.model_config.hf_config)
         self.rollout_mode = rollout_mode
         self.workers = workers
 
@@ -309,7 +312,6 @@ class vLLMHttpServer:
             "max_num_batched_tokens": self.config.max_num_batched_tokens,
             "enable_prefix_caching": self.config.enable_prefix_caching,
             "enable_sleep_mode": self.config.enable_sleep_mode,
-            "logprobs_mode": self.config.logprobs_mode,
             "disable_custom_all_reduce": True,
             "enforce_eager": self.config.enforce_eager,
             "gpu_memory_utilization": self.config.gpu_memory_utilization,
@@ -407,7 +409,7 @@ class vLLMHttpServer:
         usage_context = UsageContext.OPENAI_API_SERVER
         vllm_config = engine_args.create_engine_config(usage_context=usage_context)
         vllm_config.parallel_config.data_parallel_master_port = self._dp_master_port
-
+        from vllm.v1.engine.async_llm import AsyncLLM
         fn_args = set(dict(inspect.signature(AsyncLLM.from_vllm_config).parameters).keys())
         kwargs = {}
         if "enable_log_requests" in fn_args:
@@ -418,7 +420,8 @@ class vLLMHttpServer:
         engine_client = AsyncLLM.from_vllm_config(vllm_config=vllm_config, usage_context=usage_context, **kwargs)
 
         # Don't keep the dummy data in memory
-        await engine_client.reset_mm_cache()
+        if hasattr(engine_client, "reset_mm_cache"):
+            await engine_client.reset_mm_cache()
 
         app = build_app(args)
         if _VLLM_VERSION > version.parse("0.11.0"):
@@ -444,6 +447,12 @@ class vLLMHttpServer:
         port = engine_args.data_parallel_rpc_port  # add to config too
         handshake_address = get_tcp_uri(host, port)
 
+        from vllm.v1.engine.core import EngineCoreProc
+        try:
+            from vllm.v1.engine.utils import CoreEngineProcManager
+        except ImportError:
+            raise NotImplementedError("vLLM headless mode is not supported on this vLLM version.")
+        
         # Create the engines.
         self.engine_manager = CoreEngineProcManager(
             target_fn=EngineCoreProc.run_engine_core,
@@ -502,7 +511,10 @@ class vLLMHttpServer:
         if video_data is not None:
             multi_modal_data["video"] = video_data
 
-        prompt = TokensPrompt(prompt_token_ids=prompt_ids, multi_modal_data=multi_modal_data)
+        prompt_dict = {"prompt_token_ids": prompt_ids}
+        if multi_modal_data:
+            prompt_dict["multi_modal_data"] = multi_modal_data
+        prompt = TokensPrompt(**prompt_dict)
 
         # Add lora request
         lora_request = None
@@ -578,7 +590,8 @@ class vLLMHttpServer:
             await self.engine.reset_prefix_cache()
 
     async def wait_for_requests_to_drain(self):
-        await self.engine.wait_for_requests_to_drain()
+        if hasattr(self.engine, "wait_for_requests_to_drain"):
+            await self.engine.wait_for_requests_to_drain()
 
     async def abort_all_requests(self, reset_prefix_cache: bool = True) -> dict[str, Any]:
         """Abort all ongoing generation requests.
