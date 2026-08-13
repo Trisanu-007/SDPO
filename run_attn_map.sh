@@ -81,7 +81,8 @@ MAX_MODEL_LEN=2048
 # Setup
 # ------------------------------------------------------------------
 export PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-export PYTHONPATH="/scratch/hrishikesh/users/tri/conda_envs/sdpo_env/bin/python"
+export PYTHONPATH="${PROJECT_ROOT}"
+export PATH="/scratch/hrishikesh/users/tri/conda_envs/sdpo_env/bin:$PATH"
 export USER="${USER:-$(whoami)}"
 export N_GPUS_PER_NODE="${N_GPUS_PER_NODE:-$(nvidia-smi --list-gpus 2>/dev/null | wc -l)}"
 
