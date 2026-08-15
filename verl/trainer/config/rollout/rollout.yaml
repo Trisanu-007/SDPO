@@ -29,7 +29,7 @@ response_length: ${oc.select:data.max_response_length,512}
 dtype: bfloat16
 
 # Fraction of GPU memory used by vLLM/SGLang for KV cache.
-gpu_memory_utilization: 0.5
+gpu_memory_utilization: 0.3
 
 # Whether to ignore EOS and continue generating after EOS is hit.
 ignore_eos: False
