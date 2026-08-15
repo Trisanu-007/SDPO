@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=sdpo_tri         # ← Must include your alias
+#SBATCH --partition=gpu_rtx_pro_6000_6_csis_hyd
 #SBATCH --gres=gpu:2                          # ← Number of GPUs
-#SBATCH --cpus-per-task=4                     # ← MINIMUM 4 required
+#SBATCH --cpus-per-task=8                     # ← MINIMUM 4 required
 #SBATCH --mem=100G
 #SBATCH --time=05:00:00                       # ← Max 12:00:00 for GPU jobs
 #SBATCH --output=/scratch/hrishikesh/users/tri/logs/job-%j.log
