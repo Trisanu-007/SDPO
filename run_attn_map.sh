@@ -59,8 +59,8 @@ DATA_PATH="datasets/lcb_v6"
 MODEL_PATH="Qwen/Qwen3-8B"
 
 # Training hyperparameters (small defaults for analysis runs)
-TRAIN_BATCH_SIZE=4
-ROLLOUT_BATCH_SIZE=4
+TRAIN_BATCH_SIZE=1
+ROLLOUT_BATCH_SIZE=1
 LR=1e-6
 ALPHA=1.0
 DONTS_REPROMPT_ON_SELF_SUCCESS=True
@@ -157,7 +157,7 @@ actor_rollout_ref.rollout.val_kwargs.n=4 \
 actor_rollout_ref.actor.optim.lr_warmup_steps=0 \
 trainer.total_epochs=1 \
 trainer.n_gpus_per_node=${N_GPUS_PER_NODE} \
-actor_rollout_ref.model.use_remove_padding=false \
+actor_rollout_ref.model.use_remove_padding=true \
 max_model_len=${MAX_MODEL_LEN} \
 data.max_response_length=1536 \
 actor_rollout_ref.rollout.max_model_len=${MAX_MODEL_LEN} \
