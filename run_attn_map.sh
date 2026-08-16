@@ -128,7 +128,7 @@ mkdir -p "$LOCAL_CKPT_DIR"
 ARGS="\
 data.train_batch_size=${TRAIN_BATCH_SIZE} \
 data.train_files=[\"${TRAIN_PARQUET}\"] \
-data.val_files=null \
+data.val_files=[\"${VAL_PARQUET}\"] \
 data.apply_chat_template_kwargs={} \
 trainer.group_name=SDPO-attn-map \
 trainer.logger=[console] \
