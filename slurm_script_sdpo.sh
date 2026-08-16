@@ -22,6 +22,9 @@ export TMPDIR=/scratch/hrishikesh/users/$USER_ALIAS/tmp
 mkdir -p $PIP_CACHE_DIR $TMPDIR
 mkdir -p /scratch/hrishikesh/users/$USER_ALIAS/logs
 
+module load cuda-12.1.0-gcc-11.2.0-s5o57xp      # CUDA 12.1 — use for all GPU/LLM work
+module load anaconda3-2022.05-gcc-11.2.0-od5lltp  # Anaconda — use for conda/pip envs
+
 # ── Run your script ──
 cd /home/hrishikesh/SDPO
 ./run_attn_map.sh
