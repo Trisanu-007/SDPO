@@ -59,8 +59,8 @@ DATA_PATH="datasets/lcb_v6"
 MODEL_PATH="Qwen/Qwen3-8B"
 
 # Training hyperparameters (small defaults for analysis runs)
-TRAIN_BATCH_SIZE=1
-ROLLOUT_BATCH_SIZE=1
+TRAIN_BATCH_SIZE=2
+ROLLOUT_BATCH_SIZE=4
 LR=1e-6
 ALPHA=1.0
 DONTS_REPROMPT_ON_SELF_SUCCESS=True
