@@ -56,7 +56,7 @@ done
 CONFIG_NAME="sdpo"
 DATA_PATH="datasets/lcb_v6"
 
-MODEL_PATH="/scratch/hrishikesh/shared_models/huggingface/models--Qwen--Qwen3-8B"
+MODEL_PATH="Qwen/Qwen3-8B"
 
 # Training hyperparameters (small defaults for analysis runs)
 TRAIN_BATCH_SIZE=4
@@ -67,7 +67,7 @@ DONTS_REPROMPT_ON_SELF_SUCCESS=True
 
 # Attention map extraction settings
 ATTN_ENABLED=true
-ATTN_NUM_LAYERS=4         # capture last 4 attention layers
+ATTN_NUM_LAYERS=1         # capture last 4 attention layers
 ATTN_SAVE_EVERY=1         # save at every update_policy call
 ATTN_MAX_STEPS=20         # stop capturing after 20 saves
 
@@ -151,7 +151,7 @@ custom_reward_function.path=${REWARD_FN_PATH} \
 +actor_rollout_ref.model.override_config.attn_implementation=eager \
 algorithm.rollout_correction.rollout_is=token \
 actor_rollout_ref.rollout.tensor_model_parallel_size=${N_GPUS_PER_NODE} \
-actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+actor_rollout_ref.rollout.gpu_memory_utilization=0.35 \
 actor_rollout_ref.rollout.enforce_eager=True \
 actor_rollout_ref.rollout.val_kwargs.n=4 \
 actor_rollout_ref.actor.optim.lr_warmup_steps=0 \
