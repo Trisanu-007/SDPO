@@ -128,10 +128,11 @@ mkdir -p "$LOCAL_CKPT_DIR"
 ARGS="\
 data.train_batch_size=${TRAIN_BATCH_SIZE} \
 data.train_files=[\"${TRAIN_PARQUET}\"] \
-data.val_files=[\"${VAL_PARQUET}\"] \
+data.val_files=null \
 data.apply_chat_template_kwargs={} \
 trainer.group_name=SDPO-attn-map \
 trainer.logger=[console] \
+trainer.test_freq=-1 \
 trainer.default_local_dir=${LOCAL_CKPT_DIR} \
 actor_rollout_ref.rollout.n=${ROLLOUT_BATCH_SIZE} \
 actor_rollout_ref.model.path=${MODEL_PATH} \
