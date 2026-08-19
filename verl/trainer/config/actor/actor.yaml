@@ -326,10 +326,12 @@ router_replay:
   replay_file: null
 
 # Attention map extraction configuration for SDPO teacher/student analysis.
-# When enabled, saves per-layer attention weights from the last N transformer
-# layers for both teacher (prompt+feedback) and student (prompt) forward passes.
-# NOTE: Enabling this forces output_attentions=True which disables FlashAttention.
-#       Use only for debugging/analysis on a small number of steps.
+# When enabled, captures hook_z (value-weighted output) and hook_pattern
+# (softmax attention weights) at the specified transformer layers for both
+# teacher (prompt+feedback) and student (prompt+response) forward passes,
+# using TransformerLens run_with_cache. Saved as .npz files per update step.
+# NOTE: Use only for debugging/analysis; captures add an extra no-grad forward
+#       pass per micro-batch for both student and teacher when enabled.
 attn_map_config:
 
   # Master switch: set to true to enable attention map extraction
@@ -339,8 +341,10 @@ attn_map_config:
   # Override via CLI: actor_rollout_ref.actor.attn_map_config.save_dir=/your/path
   save_dir: "./attention_maps"
 
-  # Number of attention layers (counting from the end) to capture
-  num_layers_from_end: 4
+  # List of transformer layer indices to capture hook_z and hook_pattern from.
+  # Corresponds to blocks.{N}.attn.hook_z and blocks.{N}.attn.hook_pattern in
+  # TransformerLens naming. Defaults to the last 4 layers of a 32-layer model.
+  target_layers: [28, 29, 30, 31]
 
   # Capture every N-th call to update_policy (1 = every step)
   save_every_n_steps: 1

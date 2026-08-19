@@ -806,36 +806,32 @@ class DataParallelPPOActor(BasePPOActor):
 
                     # Student forward pass (input: prompt + response)
                     if _do_attn_capture:
-                        # --- Attention-map capture pass (no_grad, separate from loss pass) ---
-                        # We do NOT capture inside the loss forward pass because that would keep
-                        # O(seq^2) attention weight tensors in the autograd graph throughout
-                        # backward(), causing OOM. Instead: capture under no_grad first,
-                        # then run the normal loss forward (with output_attentions=False).
-                        _student_collector = make_attention_collector(
-                            model=self.actor_module,
-                            attn_map_cfg=attn_map_cfg,
-                            step=self._attn_map_step,
-                            role="student",
-                            attention_mask=model_inputs.get("attention_mask"),
-                            input_ids=model_inputs.get("input_ids"),
-                        )
-                        with torch.no_grad(), _student_collector:
-                            self._forward_micro_batch(
-                                model_inputs,
-                                temperature=temperature,
-                                calculate_entropy=False,
-                                return_all_logps=False,
-                                distill_topk=None,
-                            )
-                        _student_collector.save()
-                        # Now run the actual gradient-tracked forward pass without attn capture
-                        outputs = self._forward_micro_batch(
-                            model_inputs,
-                            temperature=temperature,
-                            calculate_entropy=calculate_entropy,
-                            return_all_logps=return_all_logps,
-                            distill_topk=distill_topk,
-                        )
+                         # --- Attention-map capture pass (no_grad, separate from loss pass) ---
+                         # Uses TransformerLens run_with_cache to hook hook_z and hook_pattern
+                         # at layers 28-31 without touching the HuggingFace forward path.
+                         # The loss-tracked forward is a separate _forward_micro_batch call below.
+                         _student_collector = make_attention_collector(
+                             attn_map_cfg=attn_map_cfg,
+                             step=self._attn_map_step,
+                             role="student",
+                         )
+                         with torch.no_grad():
+                             _student_collector.run_and_capture(
+                                 model=self.actor_module,
+                                 input=model_inputs["input_ids"],
+                                 return_type="logits",
+                                 attention_mask=model_inputs.get("attention_mask"),
+                                 input_ids=model_inputs.get("input_ids"),
+                             )
+                         _student_collector.save()
+                         # Now run the actual gradient-tracked forward pass for the loss
+                         outputs = self._forward_micro_batch(
+                             model_inputs,
+                             temperature=temperature,
+                             calculate_entropy=calculate_entropy,
+                             return_all_logps=return_all_logps,
+                             distill_topk=distill_topk,
+                         )
                     else:
                         outputs = self._forward_micro_batch(
                             model_inputs,
@@ -879,25 +875,32 @@ class DataParallelPPOActor(BasePPOActor):
                             raise ValueError("trust-region teacher requires a separate teacher_module in the actor worker.")
                         # Teacher forward pass (input: prompt + feedback)
                         if _do_attn_capture:
-                            _teacher_collector = make_attention_collector(
-                                model=teacher_model,
-                                attn_map_cfg=attn_map_cfg,
-                                step=self._attn_map_step,
-                                role="teacher",
-                                attention_mask=teacher_inputs.get("attention_mask"),
-                                input_ids=teacher_inputs.get("input_ids"),
-                            )
-                            with torch.no_grad(), _teacher_collector:
-                                teacher_outputs = self._forward_micro_batch(
-                                    teacher_inputs,
-                                    temperature=temperature,
-                                    calculate_entropy=False,
-                                    return_all_logps=return_all_logps,
-                                    distill_topk=distill_topk,
-                                    topk_indices=student_topk_indices,
-                                    module=teacher_model,
-                                )
-                            _teacher_collector.save()
+                             # Pass 1: attention capture via run_with_cache (no_grad)
+                             _teacher_collector = make_attention_collector(
+                                 attn_map_cfg=attn_map_cfg,
+                                 step=self._attn_map_step,
+                                 role="teacher",
+                             )
+                             with torch.no_grad():
+                                 _teacher_collector.run_and_capture(
+                                     model=teacher_model,
+                                     input=teacher_inputs["input_ids"],
+                                     return_type="logits",
+                                     attention_mask=teacher_inputs.get("attention_mask"),
+                                     input_ids=teacher_inputs.get("input_ids"),
+                                 )
+                             _teacher_collector.save()
+                             # Pass 2: teacher logprobs for the loss (separate HF forward)
+                             with torch.no_grad():
+                                 teacher_outputs = self._forward_micro_batch(
+                                     teacher_inputs,
+                                     temperature=temperature,
+                                     calculate_entropy=False,
+                                     return_all_logps=return_all_logps,
+                                     distill_topk=distill_topk,
+                                     topk_indices=student_topk_indices,
+                                     module=teacher_model,
+                                 )
                         else:
                             with torch.no_grad():
                                 teacher_outputs = self._forward_micro_batch(
