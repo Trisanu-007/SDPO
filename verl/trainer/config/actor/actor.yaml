@@ -343,8 +343,9 @@ attn_map_config:
 
   # List of transformer layer indices to capture hook_z and hook_pattern from.
   # Corresponds to blocks.{N}.attn.hook_z and blocks.{N}.attn.hook_pattern in
-  # TransformerLens naming. Defaults to the last 4 layers of a 32-layer model.
-  target_layers: [28, 29, 30, 31]
+  # TransformerLens naming. Qwen3-8B has 36 layers (indices 0-35); last layer = 35.
+  # For 32-layer models (e.g. Qwen2.5-Coder-7B) use [28, 29, 30, 31].
+  target_layers: [35]
 
   # Capture every N-th call to update_policy (1 = every step)
   save_every_n_steps: 1

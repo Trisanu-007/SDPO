@@ -67,9 +67,9 @@ DONTS_REPROMPT_ON_SELF_SUCCESS=True
 
 # Attention map extraction settings
 ATTN_ENABLED=true
-ATTN_NUM_LAYERS=1         # capture last 4 attention layers
-ATTN_SAVE_EVERY=1         # save at every update_policy call
-ATTN_MAX_STEPS=20         # stop capturing after 20 saves
+ATTN_TARGET_LAYERS="[35]"  # layer indices to capture (e.g. [28,29,30,31] or [31])
+ATTN_SAVE_EVERY=1                   # save at every update_policy call
+ATTN_MAX_STEPS=20                   # stop capturing after 20 saves
 
 # Reduce max sequence length for analysis runs:
 # output_attentions=True stores (batch,heads,seq,seq) in the autograd graph,
@@ -107,7 +107,7 @@ echo "  Experiment : $EXP_NAME"
 echo "  Model      : $MODEL_PATH"
 echo "  Dataset    : $DATA_PATH"
 echo "  Save dir   : $ATTN_SAVE_DIR"
-echo "  Last layers: $ATTN_NUM_LAYERS"
+echo "  Layers     : $ATTN_TARGET_LAYERS"
 echo "  Max saves  : $ATTN_MAX_STEPS"
 echo "================================================================"
 
@@ -145,7 +145,7 @@ actor_rollout_ref.actor.self_distillation.teacher_update_rate=0.01 \
 actor_rollout_ref.actor.self_distillation.dont_reprompt_on_self_success=${DONTS_REPROMPT_ON_SELF_SUCCESS} \
 actor_rollout_ref.actor.attn_map_config.enabled=${ATTN_ENABLED} \
 actor_rollout_ref.actor.attn_map_config.save_dir=${ATTN_SAVE_DIR} \
-actor_rollout_ref.actor.attn_map_config.num_layers_from_end=${ATTN_NUM_LAYERS} \
+actor_rollout_ref.actor.attn_map_config.target_layers=${ATTN_TARGET_LAYERS} \
 actor_rollout_ref.actor.attn_map_config.save_every_n_steps=${ATTN_SAVE_EVERY} \
 actor_rollout_ref.actor.attn_map_config.max_steps_to_save=${ATTN_MAX_STEPS} \
 custom_reward_function.path=${REWARD_FN_PATH} \
