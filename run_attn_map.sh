@@ -166,7 +166,7 @@ actor_rollout_ref.model.enable_gradient_checkpointing=true \
 actor_rollout_ref.rollout.max_num_seqs=16 \
 actor_rollout_ref.rollout.free_cache_engine=True \
 actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
-actor_rollout_ref.ref.fsdp_config.model_dtype=bfloat16""
+actor_rollout_ref.ref.fsdp_config.model_dtype=bfloat16"
 
 # ------------------------------------------------------------------
 # Launch
