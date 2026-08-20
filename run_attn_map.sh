@@ -69,7 +69,7 @@ DONTS_REPROMPT_ON_SELF_SUCCESS=True
 ATTN_ENABLED=true
 ATTN_TARGET_LAYERS="[35]"  # layer indices to capture (e.g. [28,29,30,31] or [31])
 ATTN_SAVE_EVERY=1                   # save at every update_policy call
-ATTN_MAX_STEPS=20                   # stop capturing after 20 saves
+ATTN_MAX_STEPS=85                   # stop capturing after 20 saves
 
 # Reduce max sequence length for analysis runs:
 # output_attentions=True stores (batch,heads,seq,seq) in the autograd graph,
@@ -152,7 +152,7 @@ custom_reward_function.path=${REWARD_FN_PATH} \
 +actor_rollout_ref.model.override_config.attn_implementation=eager \
 algorithm.rollout_correction.rollout_is=token \
 actor_rollout_ref.rollout.tensor_model_parallel_size=${N_GPUS_PER_NODE} \
-actor_rollout_ref.rollout.gpu_memory_utilization=0.35 \
+actor_rollout_ref.rollout.gpu_memory_utilization=0.15 \
 actor_rollout_ref.rollout.enforce_eager=True \
 actor_rollout_ref.rollout.val_kwargs.n=4 \
 actor_rollout_ref.actor.optim.lr_warmup_steps=0 \
@@ -162,7 +162,11 @@ actor_rollout_ref.model.use_remove_padding=true \
 max_model_len=${MAX_MODEL_LEN} \
 data.max_response_length=1536 \
 actor_rollout_ref.rollout.max_model_len=${MAX_MODEL_LEN} \
-actor_rollout_ref.model.enable_gradient_checkpointing=true"
+actor_rollout_ref.model.enable_gradient_checkpointing=true \
+actor_rollout_ref.rollout.max_num_seqs=16 \
+actor_rollout_ref.rollout.free_cache_engine=True \
+actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
+actor_rollout_ref.ref.fsdp_config.model_dtype=bfloat16""
 
 # ------------------------------------------------------------------
 # Launch
