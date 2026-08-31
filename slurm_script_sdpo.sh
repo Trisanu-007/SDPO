@@ -12,6 +12,9 @@
 export USER_ALIAS=tri
 export ENV_PATH=/scratch/hrishikesh/users/$USER_ALIAS/conda_envs/sdpo_env
 
+# Export HYDRA error for full stack trace
+export HYDRA_FULL_ERROR=1
+
 # ── Shared model cache (read-only, used by HuggingFace AND vLLM) ──
 export HF_HOME=/scratch/hrishikesh/shared_models/huggingface
 
