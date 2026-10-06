@@ -69,7 +69,7 @@ DONTS_REPROMPT_ON_SELF_SUCCESS=True
 ATTN_ENABLED=true
 ATTN_NUM_LAYERS=1         # capture last 4 attention layers
 ATTN_SAVE_EVERY=1         # save at every update_policy call
-ATTN_MAX_STEPS=20         # stop capturing after 20 saves
+ATTN_MAX_STEPS=200         # stop capturing after 20 saves
 
 # Reduce max sequence length for analysis runs:
 # output_attentions=True stores (batch,heads,seq,seq) in the autograd graph,
@@ -89,8 +89,8 @@ export N_GPUS_PER_NODE="${N_GPUS_PER_NODE:-$(nvidia-smi --list-gpus 2>/dev/null 
 # HuggingFace cache — use local cache; disable hub verification to avoid
 # network hangs when Ray workers spawn without inheriting the shell env.
 export HF_HOME="/scratch/hrishikesh/shared_models/huggingface"
-export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
-export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+# export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+# export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 
 # Silence Ray FutureWarning about accelerator env var override
 export RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
@@ -156,13 +156,17 @@ actor_rollout_ref.rollout.gpu_memory_utilization=0.35 \
 actor_rollout_ref.rollout.enforce_eager=True \
 actor_rollout_ref.rollout.val_kwargs.n=4 \
 actor_rollout_ref.actor.optim.lr_warmup_steps=0 \
-trainer.total_epochs=1 \
+trainer.total_epochs=3 \
 trainer.n_gpus_per_node=${N_GPUS_PER_NODE} \
 actor_rollout_ref.model.use_remove_padding=true \
 max_model_len=${MAX_MODEL_LEN} \
 data.max_response_length=1536 \
 actor_rollout_ref.rollout.max_model_len=${MAX_MODEL_LEN} \
-actor_rollout_ref.model.enable_gradient_checkpointing=true"
+actor_rollout_ref.model.enable_gradient_checkpointing=true \
+actor_rollout_ref.rollout.max_num_seqs=16 \
+actor_rollout_ref.rollout.free_cache_engine=True \
+actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
+actor_rollout_ref.ref.fsdp_config.model_dtype=bfloat16"
 
 # ------------------------------------------------------------------
 # Launch
