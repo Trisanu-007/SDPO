@@ -49,6 +49,42 @@ from typing import Optional
 import numpy as np
 
 # ---------------------------------------------------------------------------
+# Optional GPU acceleration via CuPy (drop-in numpy replacement on CUDA)
+# ---------------------------------------------------------------------------
+# Set xp = cupy when --gpu is passed and cupy is available; else xp = numpy.
+# All compute-heavy functions (binning, entropy, sparsity) use xp so they
+# run on GPU transparently. matplotlib always receives plain numpy arrays.
+
+_GPU_REQUESTED = False   # updated in main() after arg parsing
+xp = np                  # default: use numpy (CPU)
+
+
+def _init_gpu(requested: bool) -> bool:
+    """Try to enable CuPy. Returns True if GPU is active."""
+    global xp, _GPU_REQUESTED
+    _GPU_REQUESTED = requested
+    if not requested:
+        return False
+    try:
+        import cupy as cp
+        # Quick smoke-test: allocate a tiny array
+        _ = cp.array([1.0])
+        xp = cp
+        print("  [GPU] CuPy detected — compute ops will run on GPU.", flush=True)
+        return True
+    except Exception as e:
+        print(f"  [GPU] CuPy unavailable ({e}), falling back to CPU numpy.", flush=True)
+        xp = np
+        return False
+
+
+def _to_numpy(arr) -> np.ndarray:
+    """Convert cupy array to numpy (no-op if already numpy)."""
+    if xp is not np:
+        return xp.asnumpy(arr)
+    return arr
+
+# ---------------------------------------------------------------------------
 # Matplotlib setup – use non-interactive Agg backend so this runs headless
 # ---------------------------------------------------------------------------
 import matplotlib
@@ -117,6 +153,16 @@ def parse_args() -> argparse.Namespace:
         default=200,
         help="Maximum number of steps to include in trend plots (default: 200)",
     )
+    p.add_argument(
+        "--gpu",
+        action="store_true",
+        default=False,
+        help=(
+            "Use GPU (CuPy) for compute-heavy ops: binning, entropy, sparsity. "
+            "Requires cupy to be installed in the active conda env. "
+            "Falls back to CPU numpy automatically if cupy is unavailable."
+        ),
+    )
     return p.parse_args()
 
 
@@ -150,20 +196,20 @@ def load_npz(path: Path) -> dict[str, np.ndarray]:
     return {k: data[k] for k in data.files}
 
 
-def get_attn_mean(arrays: dict[str, np.ndarray]) -> np.ndarray:
+def get_attn_mean(arrays: dict) -> np.ndarray:
     """Mean-over-heads attention matrix from a single npz dict.
 
-    Returns shape (seq_len, seq_len).
+    Returns shape (seq_len, seq_len) as a plain numpy array.
     """
     layer_keys = [k for k in arrays if k.startswith("layer_")]
     if not layer_keys:
         raise KeyError(f"No layer_* keys found. Available: {list(arrays.keys())}")
-    # Average across all captured layers and all heads
     mats = []
     for lk in layer_keys:
-        a = arrays[lk]  # (n_heads, seq, seq)
+        a = xp.asarray(arrays[lk])  # move to GPU if xp=cupy
         mats.append(a.mean(axis=0))  # (seq, seq)
-    return np.stack(mats, axis=0).mean(axis=0)  # (seq, seq)
+    result = xp.stack(mats, axis=0).mean(axis=0)  # (seq, seq)
+    return _to_numpy(result)  # always return numpy for downstream use
 
 
 def guess_prompt_len(attn_mean: np.ndarray) -> int:
@@ -191,33 +237,45 @@ def guess_prompt_len(attn_mean: np.ndarray) -> int:
 def bin_attention(attn: np.ndarray, n_bins: int) -> np.ndarray:
     """
     Average-pool a (seq, seq) attention matrix into (n_bins, n_bins).
+    Uses xp (numpy or cupy) reshape+mean — no Python loops.
     Handles sequences shorter than n_bins gracefully.
     """
-    seq = attn.shape[0]
+    arr = xp.asarray(attn)
+    seq = arr.shape[0]
     actual_bins = min(n_bins, seq)
-    bin_size = seq / actual_bins
-    result = np.zeros((actual_bins, actual_bins), dtype=np.float32)
-    for i in range(actual_bins):
-        r0, r1 = int(i * bin_size), int((i + 1) * bin_size)
-        r1 = max(r1, r0 + 1)
-        for j in range(actual_bins):
-            c0, c1 = int(j * bin_size), int((j + 1) * bin_size)
-            c1 = max(c1, c0 + 1)
-            result[i, j] = attn[r0:r1, c0:c1].mean()
-    return result
+    # Pad seq to be evenly divisible by actual_bins
+    rem = seq % actual_bins
+    if rem != 0:
+        pad = actual_bins - rem
+        arr = xp.pad(arr, ((0, pad), (0, pad)), mode="constant", constant_values=0.0)
+    padded_seq = arr.shape[0]
+    bin_size = padded_seq // actual_bins
+    result = (
+        arr
+        .reshape(actual_bins, bin_size, actual_bins, bin_size)
+        .mean(axis=(1, 3))
+    )
+    return _to_numpy(result).astype(np.float32)
 
 
 def make_bin_labels(seq_len: int, n_bins: int, prompt_len: int) -> list:
     """Tick labels: 'P0', 'P1', ..., 'R0', 'R1', ... where P=prompt, R=response."""
     actual_bins = min(n_bins, seq_len)
-    bin_size = seq_len / actual_bins
+    # Bin boundaries after padding (same logic as bin_attention)
+    rem = seq_len % actual_bins
+    padded_seq = seq_len + ((actual_bins - rem) if rem != 0 else 0)
+    bin_size = padded_seq // actual_bins
     labels = []
+    r_counter = 0
+    p_counter = 0
     for i in range(actual_bins):
         mid = int((i + 0.5) * bin_size)
         if mid < prompt_len:
-            labels.append(f"P{i}")
+            labels.append(f"P{p_counter}")
+            p_counter += 1
         else:
-            labels.append(f"R{i - int(prompt_len / bin_size)}")
+            labels.append(f"R{r_counter}")
+            r_counter += 1
     return labels
 
 
@@ -226,28 +284,31 @@ def make_bin_labels(seq_len: int, n_bins: int, prompt_len: int) -> list:
 # ---------------------------------------------------------------------------
 
 def attention_entropy(attn_mean: np.ndarray) -> float:
-    """Mean per-row entropy of the (seq, seq) attention matrix (nats)."""
+    """Mean per-row entropy of the (seq, seq) attention matrix (nats). GPU-aware."""
+    arr = xp.asarray(attn_mean)
     eps = 1e-12
-    p = attn_mean + eps
+    p = arr + eps
     p = p / p.sum(axis=-1, keepdims=True)
-    ent = -(p * np.log(p)).sum(axis=-1)
-    return float(ent.mean())
+    ent = -(p * xp.log(p)).sum(axis=-1)
+    return float(_to_numpy(ent).mean())
 
 
 def attention_sparsity(attn_mean: np.ndarray, threshold: float = 0.01) -> float:
-    """Fraction of attention weights below *threshold* (proxy for sparsity)."""
-    return float((attn_mean < threshold).mean())
+    """Fraction of attention weights below *threshold* (proxy for sparsity). GPU-aware."""
+    arr = xp.asarray(attn_mean)
+    return float(_to_numpy((arr < threshold)).mean())
 
 
 def mean_response_attention(attn_mean: np.ndarray, prompt_len: int) -> float:
     """
     Mean attention that response tokens (rows prompt_len:) place on other
-    response tokens (columns prompt_len:).
+    response tokens (columns prompt_len:). GPU-aware.
     """
     if prompt_len >= attn_mean.shape[0]:
         return 0.0
-    sub = attn_mean[prompt_len:, prompt_len:]
-    return float(sub.mean())
+    arr = xp.asarray(attn_mean)
+    sub = arr[prompt_len:, prompt_len:]
+    return float(_to_numpy(sub).mean())
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +749,9 @@ def infer_epoch_boundaries(all_steps: list, total_epochs: int) -> list:
 def main() -> None:
     args = parse_args()
 
+    # Initialise GPU/CPU compute backend
+    gpu_active = _init_gpu(args.gpu)
+
     attn_dir = Path(args.attn_dir)
     out_dir = Path(args.out_dir)
 
@@ -704,6 +768,7 @@ def main() -> None:
     print(f"  n_bins     : {args.n_bins}")
     print(f"  dpi        : {args.dpi}")
     print(f"  epochs     : {args.total_epochs}")
+    print(f"  compute    : {'GPU (CuPy)' if gpu_active else 'CPU (numpy)'}")
     print(f"{'='*60}\n")
 
     # ── Discover files ──────────────────────────────────────────────────────
@@ -741,7 +806,9 @@ def main() -> None:
     metrics = {r: {} for r in ROLES}
 
     print(f"\nProcessing {len(plot_steps)} steps for metrics...")
-    for step in plot_steps:
+    for si, step in enumerate(plot_steps):
+        if si % 20 == 0 or si == len(plot_steps) - 1:
+            print(f"  metrics: step {si+1}/{len(plot_steps)}  (step id={step})", flush=True)
         for role in ROLES:
             if role not in step_files[step]:
                 continue
@@ -754,6 +821,7 @@ def main() -> None:
                 "sparsity":       attention_sparsity(attn_mean),
                 "mean_resp_attn": mean_response_attention(attn_mean, prompt_len),
             }
+    print("  metrics: done.", flush=True)
 
     # ── Plot 1 & 2: Per-step density plots (cap at 50 steps for performance) ──
     # Sample evenly if more than 50 steps
